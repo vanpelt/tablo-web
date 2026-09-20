@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
+from .. import encoding
 from ..state import state
 
 router = APIRouter(tags=["stream"])
@@ -366,12 +367,8 @@ async def start_transcoder(session_id: str, input_url: str):
         "-y",
         "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
         "-i", input_url,
-        # yadif: deinterlace 1080i OTA broadcast so browsers can render video
-        "-vf", "yadif",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-        "-maxrate", "2000k", "-bufsize", "4000k",
-        "-pix_fmt", "yuv420p", "-g", "60",
-        "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+        *encoding.video_args(),
+        *encoding.audio_args(),
         "-f", "hls",
         "-hls_time", "6",
         "-hls_list_size", "6",

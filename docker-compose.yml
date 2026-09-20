@@ -1,19 +1,51 @@
 services:
   backend:
-    image: ghcr.io/trevor-viljoen/tablo-web-backend:latest
+    image: ghcr.io/vanpelt/tablo-web-backend:latest
     build: ./backend
     restart: unless-stopped
     volumes:
       - data:/data
     environment:
       - PYTHONUNBUFFERED=1
+      # --- Credentials -------------------------------------------------
+      # Uncomment the secrets block below and these two lines to keep the
+      # password out of both this file and /data/config.json. Compose mounts
+      # the file at /run/secrets/<name>, which the backend reads on startup.
+      # - TABLO_EMAIL=you@example.com
+      # - TABLO_PASSWORD_FILE=/run/secrets/tablo_password
+      #
+      # --- Device ------------------------------------------------------
+      # Only needed if the account has more than one Tablo. Without it the
+      # backend cannot guess, and every request fails with "No active
+      # device". Full SID or any unique suffix.
+      # - TABLO_SID=5087B8546D56
+      #
+      # --- Browser transcode quality -----------------------------------
+      # Only affects the in-browser player, which must re-encode because no
+      # browser decodes MPEG-2 or AC-3. The IPTV/VLC path is `-c copy` and
+      # is never touched by these.
+      #
+      # TABLO_CRF       lower = better, ~18 visually lossless, 28 = upstream
+      # TABLO_PRESET    slower = better at the same size; costs CPU
+      # TABLO_MAXRATE   ceiling; broadcast source is 12-19 Mbit/s
+      # TABLO_DEINTERLACE  yadif mode: 0 = frame per frame, 1 = per field
+      #                    (~59.94fps, smoother motion, ~2x CPU)
+      - TABLO_CRF=21
+      - TABLO_PRESET=veryfast
+      - TABLO_MAXRATE=8000k
+      - TABLO_BUFSIZE=16000k
+      - TABLO_DEINTERLACE=0
+      - TABLO_AUDIO_BITRATE=192k
+      - TABLO_AUDIO_CHANNELS=2
+    # secrets:
+    #   - tablo_password
     expose:
       - "8000"
     networks:
       - internal
 
   frontend:
-    image: ghcr.io/trevor-viljoen/tablo-web-frontend:latest
+    image: ghcr.io/vanpelt/tablo-web-frontend:latest
     build: ./frontend
     restart: unless-stopped
     ports:
@@ -22,6 +54,10 @@ services:
       - backend
     networks:
       - internal
+
+# secrets:
+#   tablo_password:
+#     file: ./secrets/tablo_password
 
 networks:
   internal:

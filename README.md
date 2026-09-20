@@ -12,6 +12,11 @@
 
 A modern, responsive web application for your Tablo (Gen 4) devices. Built with React, TypeScript, FastAPI, and FFmpeg for seamless live TV streaming and library management.
 
+> **This is a fork** of [trevor-viljoen/tablo-web](https://github.com/trevor-viljoen/tablo-web)
+> adding three things: [transcode quality settings](#transcode-quality), support for
+> [Docker secrets](#credentials), and a fix for accounts with
+> [more than one Tablo](#choosing-a-device).
+
 ---
 
 ## Screenshots
@@ -106,6 +111,79 @@ tablo-web exposes an HDHomeRun-compatible tuner interface so Plex and Jellyfin c
 
 ---
 
+## Configuration
+
+All of these are environment variables on the `backend` service. The shipped
+`docker-compose.yml` lists them with the defaults.
+
+### Transcode quality
+
+The browser player has to re-encode, because no browser decodes MPEG-2 video
+or AC-3 audio — which is what over-the-air broadcast actually is. That
+re-encode is the only place picture quality can be lost, and upstream's
+settings target low CPU: `-preset ultrafast -crf 28 -maxrate 2000k`. Broadcast
+1080i is 12–19 Mbit/s, so squeezing it to 2 Mbit/s is why a browser stream can
+look softer than the same channel on a TV.
+
+| Variable | Default | Upstream | Notes |
+|---|---|---|---|
+| `TABLO_CRF` | `21` | 28 | Quality. Lower is better; ~18 is visually lossless. Each −6 roughly doubles the bitrate. |
+| `TABLO_PRESET` | `veryfast` | ultrafast | Slower presets get more quality per bit, at more CPU. |
+| `TABLO_MAXRATE` | `8000k` | 2000k | Ceiling. Raise for quality, lower for a thin network link. |
+| `TABLO_BUFSIZE` | `16000k` | 4000k | Rate-control window; conventionally 2× `TABLO_MAXRATE`. |
+| `TABLO_DEINTERLACE` | `0` | 0 | yadif mode. `1` emits a frame per field (~59.94 fps, smoother motion) for roughly double the CPU. |
+| `TABLO_AUDIO_BITRATE` | `192k` | 128k | |
+| `TABLO_AUDIO_CHANNELS` | `2` | 2 | The source is 5.1; browsers handle multichannel AAC inconsistently, so stereo is the safe default. |
+
+Measured on a 1080i CBS feed, the defaults above produce **6.9 Mbit/s** against
+upstream's 2.0 Mbit/s cap, at 1920×1080 with 192 kbit/s stereo audio.
+
+**None of this affects the IPTV endpoint**, which is a straight `-c copy` — VLC,
+Plex and Jellyfin receive the broadcast unmodified, so they are always better
+than the browser player and cost almost no CPU. If picture quality matters more
+than watching in a tab, point VLC at `http://<host>:7070/api/iptv/playlist.m3u`.
+
+### Credentials
+
+By default the email and password are saved to `/data/config.json` in plain
+text. To keep the password out of that file — and out of `docker-compose.yml` —
+supply it as a Docker secret:
+
+```yaml
+services:
+  backend:
+    environment:
+      - TABLO_EMAIL=you@example.com
+      - TABLO_PASSWORD_FILE=/run/secrets/tablo_password
+    secrets:
+      - tablo_password
+
+secrets:
+  tablo_password:
+    file: ./secrets/tablo_password
+```
+
+Resolution order is `TABLO_PASSWORD_FILE` → `/run/secrets/tablo_password` →
+`TABLO_PASSWORD`. A password that arrives by any of these is used but never
+written to `config.json`. A password already stored by an earlier version keeps
+working, so upgrading does not log you out.
+
+### Choosing a device
+
+If the account has exactly one Tablo, it is selected automatically. If it has
+more than one, the backend cannot guess, and every request fails with
+`No active device` — which surfaces as a 502 and looks like a broken login.
+Name the one you want:
+
+```yaml
+      - TABLO_SID=SID_5087B8546D56   # or any unique suffix, e.g. 5087B8546D56
+```
+
+The device picker in the UI still works; this just makes the choice survive a
+restart.
+
+---
+
 ## Architecture
 
 - **Frontend:** React + Vite + Tailwind CSS + hls.js.
@@ -118,6 +196,7 @@ tablo-web exposes an HDHomeRun-compatible tuner interface so Plex and Jellyfin c
 
 - This application proxies sensitive requests to your local Tablo device.
 - Credentials (email/password) are stored locally in a `data/config.json` volume and are only used for authentication with the Tablo cloud API.
+- To avoid storing the password at all, supply it as a Docker secret — see [Credentials](#credentials).
 - Live streams are proxied and transcoded locally on your server.
 
 ---

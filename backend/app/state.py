@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -13,6 +14,9 @@ from tablo_api import TabloAuth, TabloClient
 from tablo_api.models import TabloDevice, TabloChannel, TabloStream
 
 CONFIG_PATH = Path("/data/config.json")
+# Where Compose mounts `secrets:` entries. A module constant so tests can
+# redirect it instead of needing to write to a real /run.
+SECRETS_DIR = Path("/run/secrets")
 
 _lock = Lock()
 
@@ -46,22 +50,62 @@ class AppState:
     # Persistence
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _secret(name: str) -> str | None:
+        """Read a credential supplied out of band, never from the config file.
+
+        Follows the convention Docker and Compose already use: the value lives
+        in a file, the environment names the file, and the process reads it at
+        startup. `<NAME>_FILE` wins so a Compose `secrets:` mount works with no
+        further configuration; `/run/secrets/<name>` is where Compose puts it
+        by default; a plain environment variable is the last resort, since it
+        is visible to anything that can inspect the process.
+        """
+        path = os.environ.get(f"{name.upper()}_FILE")
+        candidates = [Path(path)] if path else []
+        candidates.append(SECRETS_DIR / name.lower())
+        for candidate in candidates:
+            try:
+                value = candidate.read_text().strip()
+            except OSError:
+                continue
+            if value:
+                return value
+        return os.environ.get(name.upper(), "").strip() or None
+
     def load_config(self) -> None:
-        if not CONFIG_PATH.exists():
-            return
-        try:
-            cfg = json.loads(CONFIG_PATH.read_text())
-            email = cfg.get("email")
-            password = cfg.get("password")
-            if email and password:
-                self.auth = TabloAuth(email, password)
-                self.email = email
-        except Exception:
-            pass
+        """Restore a session, preferring credentials we are not storing.
+
+        A password provided as a secret is used but never written back, so the
+        on-disk config can hold nothing more sensitive than an email address.
+        A password already written by an older version is still honoured, so
+        upgrading does not log anyone out.
+        """
+        cfg = {}
+        if CONFIG_PATH.exists():
+            try:
+                cfg = json.loads(CONFIG_PATH.read_text())
+            except Exception:
+                cfg = {}
+
+        email = self._secret("tablo_email") or cfg.get("email")
+        password = self._secret("tablo_password") or cfg.get("password")
+        if email and password:
+            self.auth = TabloAuth(email, password)
+            self.email = email
 
     def save_config(self, email: str, password: str) -> None:
+        """Persist what is needed to resume, and nothing more.
+
+        When the password arrived as a secret it is deliberately left out of
+        the file: the secret is already the source of truth, and writing a
+        copy would put it back on disk in plain text for no gain.
+        """
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(json.dumps({"email": email, "password": password}))
+        cfg: dict[str, str] = {"email": email}
+        if not self._secret("tablo_password"):
+            cfg["password"] = password
+        CONFIG_PATH.write_text(json.dumps(cfg))
 
     def clear_config(self) -> None:
         if CONFIG_PATH.exists():
@@ -83,10 +127,31 @@ class AppState:
         self.auth = auth
         self.email = email
         self.devices = devices
-        self.active_device = devices[0] if len(devices) == 1 else None
+        self.active_device = self._pick_device(devices)
         self._channels = None
         self.save_config(email, password)
         return devices
+
+    @staticmethod
+    def _pick_device(devices: list) -> object | None:
+        """Choose which Tablo to talk to after discovery.
+
+        One device is unambiguous. Several are not, and the original code left
+        `active_device` unset in that case, so every later request failed with
+        "No active device" and no obvious cause. TABLO_SID names the intended
+        one; it may be the full SID or any unique suffix of it, since the full
+        value is tedious to type. An unmatched or absent setting falls back to
+        leaving the choice to the caller, as before.
+        """
+        if len(devices) == 1:
+            return devices[0]
+        wanted = os.environ.get("TABLO_SID", "").strip()
+        if wanted:
+            for d in devices:
+                if d.sid == wanted or d.sid.endswith(wanted):
+                    return d
+        return None
+
 
     async def select_device(self, sid: str) -> TabloDevice:
         dev = next((d for d in self.devices if d.sid == sid), None)
