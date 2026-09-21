@@ -1,4 +1,3 @@
-import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,19 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import log_buffer as _log_buffer
 from .routes import auth, channels, iptv, stream
-from .state import state, CONFIG_PATH
+from .state import state
 
 _log_buffer.install()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if CONFIG_PATH.exists():
-        try:
-            cfg = json.loads(CONFIG_PATH.read_text())
-            if cfg.get("email") and cfg.get("password"):
-                await state.login(cfg["email"], cfg["password"])
-        except Exception:
-            pass
+    await state.restore_session()
     yield
     await state.http.aclose()
 

@@ -68,16 +68,34 @@ def test_typed_password_is_still_written(isolate):
     assert cfg["password"] == "typed-in-ui"
 
 
-def test_existing_config_still_loads(isolate):
+def test_existing_config_still_resolves(isolate):
     """Upgrading from a version that stored the password must not log you out."""
     (isolate / "config.json").write_text(
         json.dumps({"email": "me@example.com", "password": "stored"}))
 
-    st = AppState()
-    st.load_config()
+    assert AppState().resolve_credentials() == ("me@example.com", "stored")
 
-    assert st.email == "me@example.com"
-    assert st.auth is not None
+
+def test_secret_supplies_credentials_with_no_password_on_disk(isolate, monkeypatch):
+    """The whole point: config.json holds an email, the secret holds the password."""
+    (isolate / "config.json").write_text(json.dumps({"email": "me@example.com"}))
+    secret = isolate / "secret"
+    secret.write_text("from-file")
+    monkeypatch.setenv("TABLO_PASSWORD_FILE", str(secret))
+
+    assert AppState().resolve_credentials() == ("me@example.com", "from-file")
+
+
+def test_env_supplies_both_with_no_config_at_all(isolate, monkeypatch):
+    """A fresh container with only compose settings must still log in."""
+    monkeypatch.setenv("TABLO_EMAIL", "me@example.com")
+    monkeypatch.setenv("TABLO_PASSWORD", "from-env")
+
+    assert AppState().resolve_credentials() == ("me@example.com", "from-env")
+
+
+def test_nothing_to_restore_is_not_an_error(isolate):
+    assert AppState().resolve_credentials() is None
 
 
 class _Dev:
@@ -139,3 +157,35 @@ def test_compose_default_secret_path_is_read(isolate, monkeypatch):
     monkeypatch.setenv("TABLO_PASSWORD", "from-env")
 
     assert AppState._secret("tablo_password") == "from-compose"
+
+
+def test_startup_actually_uses_the_resolved_credentials(isolate, monkeypatch):
+    """Regression: the app lifespan used to read config.json directly.
+
+    That bypassed every credential source but the file, so a password supplied
+    as a Docker secret was resolved correctly and then never used.
+    """
+    import asyncio
+
+    monkeypatch.setenv("TABLO_EMAIL", "me@example.com")
+    monkeypatch.setenv("TABLO_PASSWORD", "from-env")
+
+    st = AppState()
+    seen = {}
+
+    async def fake_login(email, password):
+        seen["creds"] = (email, password)
+        return []
+
+    monkeypatch.setattr(st, "login", fake_login)
+    assert asyncio.run(st.restore_session()) is True
+    assert seen["creds"] == ("me@example.com", "from-env")
+
+
+def test_lifespan_calls_restore_session():
+    """Guards the wiring itself, not just the method."""
+    import inspect
+
+    from app import main
+
+    assert "restore_session" in inspect.getsource(main.lifespan)

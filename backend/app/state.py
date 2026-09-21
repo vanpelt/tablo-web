@@ -73,13 +73,13 @@ class AppState:
                 return value
         return os.environ.get(name.upper(), "").strip() or None
 
-    def load_config(self) -> None:
-        """Restore a session, preferring credentials we are not storing.
+    def resolve_credentials(self) -> tuple[str, str] | None:
+        """Work out which credentials to use, secret first.
 
-        A password provided as a secret is used but never written back, so the
-        on-disk config can hold nothing more sensitive than an email address.
-        A password already written by an older version is still honoured, so
-        upgrading does not log anyone out.
+        A password supplied as a secret is preferred and is never written
+        back, so config.json can hold nothing more sensitive than an email
+        address. A password already stored there by an older version is still
+        honoured, so upgrading does not log anyone out.
         """
         cfg = {}
         if CONFIG_PATH.exists():
@@ -90,9 +90,23 @@ class AppState:
 
         email = self._secret("tablo_email") or cfg.get("email")
         password = self._secret("tablo_password") or cfg.get("password")
-        if email and password:
-            self.auth = TabloAuth(email, password)
-            self.email = email
+        return (email, password) if email and password else None
+
+    async def restore_session(self) -> bool:
+        """Log back in on startup, if we have anything to log in with.
+
+        This is the single place startup auth happens. It used to be inlined
+        in the app lifespan, reading config.json directly — which silently
+        bypassed every other credential source.
+        """
+        creds = self.resolve_credentials()
+        if not creds:
+            return False
+        try:
+            await self.login(*creds)
+            return True
+        except Exception:
+            return False
 
     def save_config(self, email: str, password: str) -> None:
         """Persist what is needed to resume, and nothing more.
