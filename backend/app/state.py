@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -12,6 +13,8 @@ import httpx
 
 from tablo_api import TabloAuth, TabloClient
 from tablo_api.models import TabloDevice, TabloChannel, TabloStream
+
+log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path("/data/config.json")
 # Where Compose mounts `secrets:` entries. A module constant so tests can
@@ -101,11 +104,17 @@ class AppState:
         """
         creds = self.resolve_credentials()
         if not creds:
+            log.info("No stored credentials; waiting for a login via the UI.")
             return False
         try:
             await self.login(*creds)
+            log.info("Restored session for %s.", creds[0])
             return True
-        except Exception:
+        except Exception as exc:
+            # Loudly. A silent failure here looks identical to "not set up
+            # yet", and the UI just shows a login form with no hint that a
+            # password was supplied and rejected.
+            log.error("Startup login for %s failed: %s", creds[0], exc)
             return False
 
     def save_config(self, email: str, password: str) -> None:

@@ -163,6 +163,15 @@ secrets:
     file: ./secrets/tablo_password
 ```
 
+Write the secret by typing it, not from the clipboard — if you copied the
+command above to run it, the clipboard holds the *command*, and `pbpaste`
+would write that into the file:
+
+```bash
+read -rs -p "Tablo password: " pw && printf '%s' "$pw" > secrets/tablo_password
+unset pw && chmod 600 secrets/tablo_password
+```
+
 Resolution order is `TABLO_PASSWORD_FILE` → `/run/secrets/tablo_password` →
 `TABLO_PASSWORD`. A password that arrives by any of these is used but never
 written to `config.json`. A password already stored by an earlier version keeps

@@ -189,3 +189,25 @@ def test_lifespan_calls_restore_session():
     from app import main
 
     assert "restore_session" in inspect.getsource(main.lifespan)
+
+
+def test_startup_login_failure_is_logged(isolate, monkeypatch, caplog):
+    """A rejected password must not look the same as "never configured"."""
+    import asyncio
+    import logging
+
+    monkeypatch.setenv("TABLO_EMAIL", "me@example.com")
+    monkeypatch.setenv("TABLO_PASSWORD", "wrong")
+
+    st = AppState()
+
+    async def fail(email, password):
+        raise RuntimeError("Login failed (401)")
+
+    monkeypatch.setattr(st, "login", fail)
+    with caplog.at_level(logging.ERROR):
+        assert asyncio.run(st.restore_session()) is False
+
+    assert "Startup login" in caplog.text
+    assert "401" in caplog.text
+    assert "wrong" not in caplog.text  # never log the password itself
