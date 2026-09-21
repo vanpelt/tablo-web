@@ -211,3 +211,15 @@ def test_startup_login_failure_is_logged(isolate, monkeypatch, caplog):
     assert "Startup login" in caplog.text
     assert "401" in caplog.text
     assert "wrong" not in caplog.text  # never log the password itself
+
+
+def test_log_buffer_captures_app_messages():
+    """Regression: root stayed at WARNING, so app info lines never buffered."""
+    import logging
+
+    from app import log_buffer
+
+    log_buffer.recent_logs.clear()
+    logging.getLogger("app.test").info("hello from the app")
+
+    assert any("hello from the app" in line for line in log_buffer.recent_logs)
